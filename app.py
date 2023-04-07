@@ -3,12 +3,6 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 import os
 
-import uuid
-import sqlite3
-from flask_restful import Resource, Api
-import json
-import copy
-
 # Init app
 app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))  # make the base directory same as this file location
