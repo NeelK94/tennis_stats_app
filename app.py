@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import or_, and_
 from flask_marshmallow import Marshmallow
 import os
 
@@ -15,8 +16,10 @@ db = SQLAlchemy(app)
 ma = Marshmallow(app)
 
 
-# Product Class/Model
+# User Class/Model
 class User(db.Model):
+    __tablename__ = "Users"
+
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(10), unique=True)
     # firstName = db.Column(db.String(30))
@@ -30,15 +33,55 @@ class User(db.Model):
         self.email = email
 
 
+# Match Class/Model
+
+class Match(db.Model):
+
+    __tablename__ = "Matches"
+
+    match_id = db.Column(db.Integer, primary_key=True)
+    set_num = db.Column(db.Integer)
+    game_num = db.Column(db.Integer)
+    server = db.Column(db.Integer)  # ref user with id
+    receiver = db.Column(db.Integer)  # ref user with id
+    first_serve_outcome = db.Column(db.String)
+    second_serve_outcome = db.Column(db.String)
+    winner = db.Column(db.Integer)  # ref user with id
+
+    def __init__(self, player_one, player_two, starter):
+        self.player_one = player_one
+        self.player_two = player_two
+        if starter == 2:
+            self.server = player_one
+            self.receiver = player_two
+        else:
+            self.server = player_two
+            self.receiver = player_one
+        self.set_num = 1
+        self.game_num = 1
+
+
+
 # User Schema
 class UserSchema(ma.Schema):
     class Meta:
         fields = ('id', 'username', 'password', 'email')
 
 
-# Init Schema
+# Match Schema
+class MatchSchema(ma.Schema):
+    class Meta:
+        fields = ('match_id', 'set_num', 'game_num', 'server', 'receiver', 'first_serve_outcome', 'second_serve_outcome'
+                  , 'winner')
+
+
+# Init Single Schemas
 user_schema = UserSchema()
-users_schema = UserSchema(many=True)  # This initiates a schema for multiple users
+match_schema = MatchSchema()
+
+# Init Multiple Schemas
+users_schema = UserSchema(many=True)
+matches_schema = MatchSchema(many=True)
 
 # When first starting the db:
 with app.app_context():
@@ -49,6 +92,43 @@ with app.app_context():
 def homepage():
     return "Home"
 
+
+@app.route('/match', methods=['POST'])
+def add_match():
+    player_one = request.json['player1']
+    player_two = request.json['player2']
+    starter = request.json['starter']
+
+    new_match = Match(player_one, player_two, starter)
+
+    db.session.add(new_match)
+    db.session.commit()
+
+    return match_schema.jsonify(new_match)
+
+@app.route('/match', methods=['GET'])
+def list_matches():
+    matches = Match.query.all()
+    result = matches_schema.dump(matches)
+    return jsonify(result)
+
+@app.route('/match/<int:id>', methods=['GET'])
+def get_match(id):
+    match = Match.query.get(id)
+    result = user_schema.jsonify(match)
+    return result
+
+
+@app.route('/match/<string:name1>/<string:name2>', methods=['GET'])
+def get_matches(name1, name2):
+    matches = Match.query.filter(
+        or_(
+            and_(Match.server == name1, Match.receiver == name2),
+            and_(Match.server == name2, Match.receiver == name1)
+        )
+    ).all()
+
+    return matches_schema.jsonify(matches)
 
 @app.route('/user', methods=['POST'])
 def add_user():
@@ -72,8 +152,16 @@ def get_users():
     return jsonify(result)
 
 
+# Get single users by name
+@app.route('/user/<string:name>', methods=['GET'])
+def get_user_by_name(name):
+    user = User.query.filter(User.username == name).all()[0]
+    result = user_schema.jsonify(user)
+    return result
+
+
 # Get single users
-@app.route('/user/<id>', methods=['GET'])
+@app.route('/user/<int:id>', methods=['GET'])
 def get_user(id):
     user = User.query.get(id)
     result = user_schema.jsonify(user)
@@ -108,7 +196,6 @@ def delete_user(id):
     db.session.commit()
     result = user_schema.jsonify(user)
     return result
-
 
 
 '''
