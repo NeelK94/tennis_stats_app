@@ -36,12 +36,13 @@ class User(db.Model):
 # Match Class/Model
 
 class Match(db.Model):
-
     __tablename__ = "Matches"
 
     match_id = db.Column(db.Integer, primary_key=True)
     set_num = db.Column(db.Integer)
     game_num = db.Column(db.Integer)
+    server_score = db.Column(db.String)
+    receiver_score = db.Column(db.String)
     server = db.Column(db.Integer)  # ref user with id
     receiver = db.Column(db.Integer)  # ref user with id
     first_serve_outcome = db.Column(db.String)
@@ -59,7 +60,8 @@ class Match(db.Model):
             self.receiver = player_one
         self.set_num = 1
         self.game_num = 1
-
+        self.server_score = "0"
+        self.receiver_score = "0"
 
 
 # User Schema
@@ -71,8 +73,14 @@ class UserSchema(ma.Schema):
 # Match Schema
 class MatchSchema(ma.Schema):
     class Meta:
-        fields = ('match_id', 'set_num', 'game_num', 'server', 'receiver', 'first_serve_outcome', 'second_serve_outcome'
-                  , 'winner')
+        fields = ('match_id', 'set_num', 'game_num', 'server_score', 'receiver_score', 'server', 'receiver',
+                  'first_serve_outcome', 'second_serve_outcome', 'winner')
+
+
+# verified / unverified
+# login API
+# header for every request will include header "basic auth". Verify before you run code.
+
 
 
 # Init Single Schemas
@@ -83,8 +91,10 @@ match_schema = MatchSchema()
 users_schema = UserSchema(many=True)
 matches_schema = MatchSchema(many=True)
 
+
 # When first starting the db:
 with app.app_context():
+    db.drop_all()
     db.create_all()
 
 
@@ -93,10 +103,11 @@ def homepage():
     return "Home"
 
 
+# Add new match
 @app.route('/match', methods=['POST'])
 def add_match():
-    player_one = request.json['player1']
-    player_two = request.json['player2']
+    player_one = request.json['player1']  # id
+    player_two = request.json['player2']  # id
     starter = request.json['starter']
 
     new_match = Match(player_one, player_two, starter)
@@ -106,11 +117,70 @@ def add_match():
 
     return match_schema.jsonify(new_match)
 
+
+# Update match (add in a point)
+@app.route('/match/<int:id>', methods=['PUT'])
+def add_point(id):
+    match = Match.query.get(id)
+
+    set_num = request.json['set']
+    game_num = request.json['game']
+    server_score = request.json['server_score']
+    receiver_score = request.json['receiver_score']
+    server = request.json['server']
+    receiver = request.json['receiver']
+    first_serve_outcome = request.json['first_serve_outcome']
+    second_serve_outcome = request.json['second_serve_outcome']
+    winner = request.json['winner']
+
+    match.set_num = set_num
+    match.game_num = game_num
+    match.server_score = server_score
+    match.receiver_score = receiver_score
+    match.server = server
+    match.receiver = receiver
+    match.first_serve_outcome = first_serve_outcome
+    match.second_serve_outcome = second_serve_outcome
+    match.winner = winner
+
+    db.session.commit()  # No need to add before you commit, since its a PUT
+
+    return winner
+'''
+
+# Update match 2 (add in a point and calculate details)
+@app.route('/match/<int:id>', methods=['PUT'])
+def add_point_2(id):
+    match = Match.query.get(id)
+
+    first_serve_outcome = request.json['first_serve_outcome']
+    second_serve_outcome = request.json['second_serve_outcome']
+    winner = request.json['winner']
+
+    match.first_serve_outcome = first_serve_outcome
+    match.second_serve_outcome = second_serve_outcome
+    match.winner = winner
+
+    # Evaluate match context
+    match.set_num = set_num
+    match.game_num = game_num
+    match.server_score = server_score
+    match.receiver_score = receiver_score
+    match.server = server
+    match.receiver = receiver
+
+    db.session.commit()  # No need to add before you commit, since its a PUT
+
+    return winner
+'''
+
+
 @app.route('/match', methods=['GET'])
 def list_matches():
     matches = Match.query.all()
     result = matches_schema.dump(matches)
     return jsonify(result)
+
 
 @app.route('/match/<int:id>', methods=['GET'])
 def get_match(id):
@@ -119,16 +189,17 @@ def get_match(id):
     return result
 
 
-@app.route('/match/<string:name1>/<string:name2>', methods=['GET'])
-def get_matches(name1, name2):
+@app.route('/match/<int:id1>/<int:id2>', methods=['GET'])
+def get_matches(id1, id2):
     matches = Match.query.filter(
         or_(
-            and_(Match.server == name1, Match.receiver == name2),
-            and_(Match.server == name2, Match.receiver == name1)
+            and_(Match.server == id1, Match.receiver == id2),
+            and_(Match.server == id2, Match.receiver == id1)
         )
     ).all()
 
     return matches_schema.jsonify(matches)
+
 
 @app.route('/user', methods=['POST'])
 def add_user():
@@ -197,151 +268,6 @@ def delete_user(id):
     result = user_schema.jsonify(user)
     return result
 
-
-'''
-conn = sqlite3.connect("tennis.db")
-
-# define columns to be used when creating players table
-user_columns = [
-    "id INTEGER PRIMARY KEY",
-    "username VARCHAR UNIQUE",
-    "password VARCHAR",
-    "email VARCHAR"
-]
-
-# Create table for players
-conn.execute(f"CREATE TABLE players ({','.join(user_columns)})")
-cur = conn.cursor()
-
-
-# Populate users initially
-users_db = [
-    "11111, 'NeelPeel', 'Iliketennis123', 'neel-k94@hotmail.com'",
-    "11112, 'Antipesto', 'password11', 'adil.khokhar@yahoo.com'",
-    "11113, 'BunceyTheCat', 'Iamacat!!', 'big.boosh@gmail.com'"
-]
-
-for user in users_db:
-    conn.execute(f"INSERT INTO players VALUES ({user})")
-
-conn.commit()
-
-cur.execute("SELECT * FROM players")
-
-for person in cur.fetchall():
-    print(person)
-
-users = [
-    {"id": "aaa111",
-     "username": "NeelPeel",
-     "password": "Iliketennis123",
-     "email": "neel-k94@hotmail.com"
-     },
-    {"id": "aaa112",
-     "username": "Antipesto",
-     "password": "password11",
-     "email": "adil.khokhar@yahoo.com"
-     },
-    {"id": "aaa113",
-     "username": "BunceyTheCat",
-     "password": "Iamacat!!",
-     "email": "big.boosh@gmail.com"
-     }
-]
-
-games = [
-    {"gameid": "00001",
-     "player1": "aaa111",
-     "player2": "aaa112",
-     "winner": "aaa111"}
-]
-
-
-def valid_user(username):
-    for user in users:
-        if user["username"] == username:
-            return False
-    return True
-
-
-def verify_login(username, password):
-    global users
-    for user in users:
-        if user["username"] == username:
-            if user["password"] == password:
-                return True
-    return False
-
-
-@app.route("/")
-def home_page():
-    return "Welcome to the home page!"
-
-
-@app.route("/players")
-def list_players():
-    global users
-    return jsonify(users)
-
-
-@app.route("/user", methods=['POST'])
-def add_player():
-    global users
-    record = request.json
-    if valid_user(record["username"]):
-        new_user = {"id": str(uuid.uuid4()),
-                    "username": record["username"],
-                    "password": record["password"],
-                    "email": record["email"]}
-        users.append(new_user)
-        return jsonify(new_user)
-    else:
-        return "That username is taken!"
-
-
-@app.route("/login", methods=['POST'])
-def login():
-    global users
-    record = request.json  # Json or username and password
-    if verify_login(record["username"], record["password"]):
-        return f"Welcome {record['username']}"
-    return "Login details incorrect"
-
-
-@app.route("/user/closeAccount", methods=['POST'])
-def delete_account():
-    global users
-    record = request.json  # Username and password
-    new_list = []
-    if verify_login(record["username"], record["password"]):
-        for user in users:
-            if user["username"] == record["username"]:
-                users.remove(user)
-                return "User deleted"
-    return "Invalid credentials!"
-
-
-@app.route("/user/update/newPassword", methods=['POST'])
-def update_password():
-    global users
-    record = request.json
-    for user in users:
-        if user["username"] == record["username"]:
-            user.update({"password": record["new_password"]})
-            return "Password changed"
-    return "User not found"
-
-
-@app.route("/user/update/newEmail", methods=['POST'])
-def update_email():
-    global users
-    record = request.json
-    for user in users:
-        if user["username"] == record["username"]:
-            user["email"] = record["new_email"]
-            return "Email address changed"
-    return "User not found"
-'''
 
 if __name__ == '__main__':
     app.run(debug=True)
