@@ -41,7 +41,7 @@ class Match(db.Model):
     match_id = db.Column(db.Integer, primary_key=True)
     player_1_id = db.Column(db.Integer)
     player_2_id = db.Column(db.Integer)
-    time_stamp = db.Column(db.DateTime)
+    time_stamp = db.Column(db.String) # CHANGE TO DATETIME!!!
     winner = db.Column(db.Integer)
     loser = db.Column(db.Integer)
     status = db.Column(db.String)  # Unsent, Sent, Verified, Declined
@@ -53,7 +53,6 @@ class Match(db.Model):
         self.winner = winner
         self.loser = loser
         self.status = "Unsent"
-
 
 
 # Points Class/Model
@@ -91,7 +90,7 @@ class UserSchema(ma.Schema):
 # Match Schema
 class MatchSchema(ma.Schema):
     class Meta:
-        fields = ('match_id', 'player_1_id', 'player_2_id', 'time_stamp', 'winner', 'loser', 'status')
+            fields = ('match_id', 'player_1_id', 'player_2_id', 'time_stamp', 'winner', 'loser', 'status')
 
 
 # Points Schema
@@ -112,23 +111,32 @@ user_schema = UserSchema()
 match_schema = MatchSchema()
 point_schema = PointsSchema()
 
-
 # Init Multiple Schemas
 users_schema = UserSchema(many=True)
 matches_schema = MatchSchema(many=True)
 points_schema = PointsSchema(many=True)
 
-
 # When first starting the db:
 with app.app_context():
-    #db.drop_all()
+    # db.drop_all()
     db.create_all()
+
+
+def valid_username(uname):
+    query = User.query.filter(User.username == uname).all()
+    if query:
+        return False
+    else:
+        return True
+
+
 
 
 @app.route('/')
 def homepage():
     return "Home"
 
+# region USERS
 
 # Get all users
 @app.route('/user', methods=['GET'])
@@ -138,18 +146,21 @@ def get_users():
     return jsonify(result)
 
 
-# Get single users
-@app.route('/user/<int:id>', methods=['GET'])
-def get_user(id):
-    user = User.query.get(id)
+# Get a single user by username
+@app.route('/user', methods=['GET'])
+def user_search():
+    username = request.args.get('username')
+    user = User.query.filter(User.username == username).all()[0]
+
     result = user_schema.jsonify(user)
+
     return result
 
 
-# Get single users by name
-@app.route('/user/<string:name>', methods=['GET'])
-def get_user_by_name(name):
-    user = User.query.filter(User.username == name).all()[0]
+# Get single user by id
+@app.route('/user/<int:id>', methods=['GET'])
+def get_user(id):
+    user = User.query.get(id)
     result = user_schema.jsonify(user)
     return result
 
@@ -160,6 +171,9 @@ def add_user():
     password = request.json['password']
     email = request.json['email']
 
+    if valid_username(username) is False:
+        return "Username is already taken"
+
     new_user = User(username, password, email)
 
     db.session.add(new_user)
@@ -169,6 +183,7 @@ def add_user():
 
 
 # Update user
+## For production this would be more complex where you can change one thing at a time
 @app.route('/user/<id>', methods=['PUT'])
 def update_user(id):
     user = User.query.get(id)
@@ -183,7 +198,7 @@ def update_user(id):
 
     new_user = User(username, password, email)
 
-    db.session.commit()  # No need to add before you commit, since its a PUT
+    db.session.commit()  # No need to add before you commit, since it's a PUT
 
     return user_schema.jsonify(new_user)
 
@@ -197,7 +212,11 @@ def delete_user(id):
     result = user_schema.jsonify(user)
     return result
 
+# endregion USERS
 
+# region MATCHES
+
+# List all matches
 @app.route('/match', methods=['GET'])
 def list_matches():
     matches = Match.query.all()
@@ -205,24 +224,40 @@ def list_matches():
     return jsonify(result)
 
 
-@app.route('/match/<int:id>', methods=['GET'])
-def get_match(id):
-    match_list = Match.query.filter(Match.match_id == id).all()
-    result = matches_schema.dump(match_list)
-    return jsonify(result)
+# Get a match by match_id
+@app.route('/match/<match_id>', methods=['GET'])
+def get_match(match_id):
+    match = Match.query.get(match_id)
+    result = match_schema.jsonify(match)
+    return result
 
 
-@app.route('/match/<int:id')
+# Filter matches for one player or a pair of players
+@app.route('/match/search', methods=['GET'])
+def get_matches():
+    p1 = request.args.get('p1')
+    p2 = request.args.get('p2')
 
+    if p1 and p2:
+        print("Both players given")
+        matches = Match.query.filter(
+            or_(
+                and_(Match.player_1_id == p1, Match.player_2_id == p2),
+                and_(Match.player_1_id == p2, Match.player_2_id == p1)
+            )
+        ).all()
 
-@app.route('/match/<int:id1>/<int:id2>', methods=['GET'])
-def get_matches(id1, id2):
-    matches = Match.query.filter(
-        or_(
-            and_(Match.server == id1, Match.receiver == id2),
-            and_(Match.server == id2, Match.receiver == id1)
-        )
-    ).all()
+    elif p1:
+        print("Only p1 given")
+        matches = Match.query.filter(
+            or_(Match.player_1_id == p1, Match.player_2_id == p1)
+        ).all()
+
+    elif p2:
+        print("Only p2 given")
+        matches = Match.query.filter(
+            or_(Match.player_1_id == p2, Match.player_2_id == p2)
+        ).all()
 
     return matches_schema.jsonify(matches)
 
@@ -243,9 +278,60 @@ def add_match():
     return match_schema.jsonify(new_match)
 
 
+# Update match status
+@app.route('/match/<match_id>', methods=['PUT'])
+def update_status(match_id):
+    match = Match.query.get(match_id)
+    new_status = request.json['status']
+
+    if new_status not in ['Unsent', 'Sent', 'Verified', 'Declined']:
+        return "Invalid status"
+
+    match.status = new_status
+
+    db.session.commit()
+
+    return match_schema.jsonify(match)
+
+# endregion MATCHES
+
+# region POINTS
 
 
+# Get all points
+@app.route('/points', methods=['GET'])
+def all_points():
+    all_data = Points.query.all()
+    result = points_schema.dump(all_data)
+    return jsonify(result)
 
+
+# Filter points by match_id (and eventually other things)
+@app.route('/points/filter', methods=['GET'])
+def filter_points():
+    match_id = request.args.get('match_id')
+    points = Points.query.filter(Points.match_id == match_id).order_by(Points.point_num.asc())
+    result = points_schema.dump(points)
+    return jsonify(result)
+
+
+# Add a matches points to the points table
+@app.route('/points', methods=['POST'])
+def add_points():
+    match_data = request.get_json()
+
+    rows = points_schema.load(match_data)
+
+    for row in rows:
+        new_row = Points(**row)
+        db.session.add(new_row)
+
+    db.session.commit()
+
+    return jsonify({'message': 'Rows added successfully'}), 201
+
+
+# endregion POINTS
 
 
 if __name__ == '__main__':
