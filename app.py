@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
+from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, and_
 from flask_marshmallow import Marshmallow
@@ -14,7 +15,11 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 # Init ma
 ma = Marshmallow(app)
+# Init LoginManager
+login_manager = LoginManager()
+login_manager.init_app(app)
 
+app.secret_key = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
 
 # User Class/Model
 class User(db.Model):
@@ -130,11 +135,30 @@ def valid_username(uname):
         return True
 
 
-
-
 @app.route('/')
 def homepage():
-    return "Home"
+    if 'username' in session:
+        return f'Logged in as {session["username"]}'
+    return 'You are not logged in'
+
+
+@app.route('/login', methods=['POST'])
+def login():
+    session['username'] = request.json['username']
+    session['password'] = request.json['password']
+    return "Hey!"
+
+
+@app.route('/logout')
+def logout():
+    # remove the username from the session if it's there
+    session.pop('username', None)
+    return "Goodbye!"
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.get(user_id)
 
 # region USERS
 
@@ -332,6 +356,158 @@ def add_points():
 
 
 # endregion POINTS
+
+
+@app.route('/user/<id>/overview', methods=['GET'])
+def get_summary(id):
+    user = User.query.get(id)
+    matches = Match.query.filter(
+        or_(Match.player_1_id == id, Match.player_2_id == id)
+    ).all()
+
+    total_matches = len(matches)
+    matches_won = Match.query.filter(Match.winner == id).all()
+    total_wins = len(matches_won)
+
+    if total_matches == 0:
+        win_percentage = 0
+    else:
+        win_percentage = (total_wins/total_matches)*100
+
+    return jsonify({'Matches played': total_matches, 'Matches won': total_wins, 'Win %': win_percentage})
+
+
+@app.route('/user/<id>/details', methods=['GET'])
+def get_details(id):
+    user = User.query.get(id)
+
+    total_points_played = len(
+        Points.query.filter(
+            or_(Points.server_id == id, Points.receiver_id == id)
+        ).all()
+    )
+    total_points_won = len(
+        Points.query.filter(
+            Points.winner_id == id
+        ).all()
+    )
+    first_serve_count = len(Points.query.filter(Points.server_id == id).all())
+    second_serve_count = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.second_serve_outcome != "Null")
+        ).all()
+    )
+    first_serve_in = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.first_serve_outcome != "Fault")
+        ).all()
+    )
+    second_serve_in = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.second_serve_outcome != "Fault", Points.second_serve_outcome != "Null")
+        ).all()
+    )
+    first_serve_won = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.first_serve_outcome != "Fault", Points.winner_id == id)
+        ).all()
+    )
+    second_serve_won = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.second_serve_outcome != "Fault", Points.second_serve_outcome != "Null",
+                 Points.winner_id == id)
+        ).all()
+    )
+    ace_count = len(
+        Points.query.filter(
+            and_(Points.server_id == id,
+                 or_(Points.first_serve_outcome == "Ace", Points.second_serve_outcome == "Ace")
+                 )
+        ).all()
+    )
+    double_fault_count = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.first_serve_outcome == "Fault", Points.second_serve_outcome == "Fault")
+        ).all()
+    )
+    service_games_played = len(
+        Points.query.filter(
+            and_(
+                Points.server_id == id,
+                or_(Points.server_score == "Win", Points.receiver_score == "Win")
+            )
+        ).all()
+    )
+    receiving_games_played = len(
+        Points.query.filter(
+            and_(
+                Points.receiver_id == id,
+                or_(Points.server_score == "Win", Points.receiver_score == "Win")
+            )
+        ).all()
+    )
+    service_games_won = len(
+        Points.query.filter(
+            and_(Points.server_id == id, Points.server_score == "Win")
+        ).all()
+    )
+    receiving_games_won = len(
+        Points.query.filter(
+            and_(Points.receiver_id == id, Points.receiver_score == "Win")
+        ).all()
+    )
+
+    try:
+        percentage_points_won = (total_points_won / total_points_played) * 100
+    except ZeroDivisionError as e:
+        percentage_points_won = "Null"
+    try:
+        percentage_first_serves_in = (first_serve_in / first_serve_count) * 100
+    except ZeroDivisionError as e:
+        percentage_first_serves_in = "Null"
+    try:
+        percentage_first_serve_points_won = (first_serve_won / first_serve_count) * 100
+    except ZeroDivisionError as e:
+        percentage_first_serve_points_won = "Null"
+    try:
+        percentage_second_serves_in = (second_serve_in / second_serve_count) * 100
+    except ZeroDivisionError as e:
+        percentage_second_serves_in = "Null"
+    try:
+        percentage_second_serve_points_won = (second_serve_won / second_serve_count) * 100
+    except ZeroDivisionError as e:
+        percentage_second_serve_points_won = "Null"
+    try:
+        percentage_aces = (ace_count / (first_serve_count + second_serve_count)) * 100
+    except ZeroDivisionError as e:
+        percentage_aces = "Null"
+    try:
+        percentage_double_faults = (double_fault_count / (first_serve_count + second_serve_count)) * 100
+    except ZeroDivisionError as e:
+        percentage_double_faults = "Null"
+    try:
+        percentage_serve_win = (service_games_won / service_games_played) * 100
+    except ZeroDivisionError as e:
+        percentage_serve_win = "Null"
+    try:
+        percentage_receive_win = (receiving_games_won / receiving_games_played) * 100
+    except ZeroDivisionError as e:
+        percentage_receive_win = "Null"
+
+    result = {
+        "Points won %" : percentage_points_won,
+        "First serves in %": percentage_first_serves_in,
+        "Second serves in %": percentage_second_serves_in,
+        "First serves won %": percentage_first_serve_points_won,
+        "Second serves won %": percentage_second_serve_points_won,
+        "Ace %": percentage_aces,
+        "Double fault %": percentage_double_faults,
+        "Service games win %": percentage_serve_win,
+        "receiving games win %": percentage_receive_win
+
+    }
+
+    return result
 
 
 if __name__ == '__main__':
