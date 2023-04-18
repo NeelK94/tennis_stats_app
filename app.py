@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify, session
-from flask_login import LoginManager
+from flask import Flask, request, jsonify, session, request
+from flask_login import LoginManager, UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, and_
 from flask_marshmallow import Marshmallow
@@ -21,16 +21,17 @@ login_manager.init_app(app)
 
 app.secret_key = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
 
+
 # User Class/Model
-class User(db.Model):
+class User(db.Model, UserMixin):
     __tablename__ = "Users"
 
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(10), unique=True)
+    username = db.Column(db.String(20), unique=True, nullable=False)
     # firstName = db.Column(db.String(30))
     # lastName = db.Column(db.String(30))
-    password = db.Column(db.String)
-    email = db.Column(db.String)
+    password = db.Column(db.String, nullable=False)
+    email = db.Column(db.String, nullable=False)
 
     def __init__(self, username, password, email):
         self.username = username
@@ -46,7 +47,7 @@ class Match(db.Model):
     match_id = db.Column(db.Integer, primary_key=True)
     player_1_id = db.Column(db.Integer)
     player_2_id = db.Column(db.Integer)
-    time_stamp = db.Column(db.String) # CHANGE TO DATETIME!!!
+    time_stamp = db.Column(db.String)  # CHANGE TO DATETIME!!!
     winner = db.Column(db.Integer)
     loser = db.Column(db.Integer)
     status = db.Column(db.String)  # Unsent, Sent, Verified, Declined
