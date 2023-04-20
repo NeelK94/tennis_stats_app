@@ -1,5 +1,9 @@
-Flask
+Flask~=2.2.3
 flask_login
+sqlalchemy-utils
 flask_sqlalchemy
 flask_marshmallow
-SQLAlchemy
+SQLAlchemy~=2.0.9
+marshmallow~=3.19.0
+PyJWT~=2.6.0
+passlib~=1.7.4

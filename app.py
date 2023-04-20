@@ -1,49 +1,56 @@
-from flask import Flask, request, jsonify, session, request
-from flask_login import LoginManager, UserMixin
+from flask import Flask, request, jsonify, session, request, make_response
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, and_
 from flask_marshmallow import Marshmallow
+from marshmallow import validates, ValidationError, fields
 import os
+import datetime
+import uuid
+import jwt
+from passlib.hash import sha256_crypt
+from functools import wraps
 
 # Init app
 app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))  # make the base directory same as this file location
 # Database
+app.config['SECRET_KEY'] = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'db.sqlite')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Init db
 db = SQLAlchemy(app)
 # Init ma
 ma = Marshmallow(app)
-# Init LoginManager
-login_manager = LoginManager()
-login_manager.init_app(app)
 
-app.secret_key = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
+
+
+# password security
+#force_auto_coercion()
 
 
 # User Class/Model
-class User(db.Model, UserMixin):
-    __tablename__ = "Users"
-
+class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(20), unique=True, nullable=False)
-    # firstName = db.Column(db.String(30))
-    # lastName = db.Column(db.String(30))
-    password = db.Column(db.String, nullable=False)
+    password = db.Column(db.String(120))
     email = db.Column(db.String, nullable=False)
 
     def __init__(self, username, password, email):
+
         self.username = username
         self.password = password
         self.email = email
+
+    # Verify if a given password is equal to the actual password
+    def verify_password(self, given_pass):
+        verification = sha256_crypt.verify(given_pass, self.password)
+        print(verification)
+        return verification
 
 
 # Match Class/Model
 
 class Match(db.Model):
-    __tablename__ = "Matches"
-
     match_id = db.Column(db.Integer, primary_key=True)
     player_1_id = db.Column(db.Integer)
     player_2_id = db.Column(db.Integer)
@@ -91,12 +98,40 @@ class Points(db.Model):
 class UserSchema(ma.Schema):
     class Meta:
         fields = ('id', 'username', 'password', 'email')
+        ordered = True
+
+    id = fields.Integer(dump_only=True)
+    username = fields.String(required=True)
+    password = fields.String(required=True)
+    email = fields.String(required=True)
+
+    @validates('username')
+    def validate_username(self, value):
+        if not value:
+            raise ValidationError('Username is required')
+        if len(value) < 4 or len(value) > 50:
+            raise ValidationError('Username must be between 4 and 50 characters')
+        if valid_username(value) is False:
+            raise ValidationError('Username is already taken')
+        return value
+
+    @validates('email')
+    def validate_email(self, value):
+        if not value:
+            raise ValidationError('Email is required')
+        return value
+
+    @validates('password')
+    def validate_password(self, value):
+        if not value:
+            raise ValidationError('Password is required')
+        return value
 
 
 # Match Schema
 class MatchSchema(ma.Schema):
     class Meta:
-            fields = ('match_id', 'player_1_id', 'player_2_id', 'time_stamp', 'winner', 'loser', 'status')
+        fields = ('match_id', 'player_1_id', 'player_2_id', 'time_stamp', 'winner', 'loser', 'status')
 
 
 # Points Schema
@@ -105,11 +140,6 @@ class PointsSchema(ma.Schema):
         fields = ('point_id', 'match_id', 'point_num', 'server_id', 'receiver_id', 'server_sets', 'receiver_sets',
                   'server_games', 'receiver_games', 'server_score', 'receiver_score', 'first_serve_outcome',
                   'second_serve_outcome', 'winner_id')
-
-
-# Use query parameters
-# login API
-# header for every request will include header "basic auth". Verify before you run code.
 
 
 # Init Single Schemas
@@ -128,6 +158,29 @@ with app.app_context():
     db.create_all()
 
 
+def token_required(f):
+    @wraps(f)
+    def decorator(*args, **kwargs):
+
+        token = None
+
+        if 'x-access-tokens' in request.headers:
+            token = request.headers['x-access-tokens']
+
+        if not token:
+            return jsonify({'message': 'a valid token is missing'})
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'])
+            current_user = User.query.filter_by(id=data['id']).first()
+        except:
+            return jsonify({'message': 'token is invalid'})
+
+        return f(current_user, *args, **kwargs)
+
+    return decorator
+
+
 def valid_username(uname):
     query = User.query.filter(User.username == uname).all()
     if query:
@@ -138,28 +191,25 @@ def valid_username(uname):
 
 @app.route('/')
 def homepage():
-    if 'username' in session:
-        return f'Logged in as {session["username"]}'
-    return 'You are not logged in'
+    return "Hello!"
 
 
 @app.route('/login', methods=['POST'])
 def login():
-    session['username'] = request.json['username']
-    session['password'] = request.json['password']
-    return "Hey!"
+    auth = request.authorization
+    user = User.query.filter_by(username=auth.username).first()
 
+    if not auth or not auth.username or not auth.password:
+        return make_response('could not verify', 401, {'WWW.Authentication': 'Basic realm: "login required"'})
 
-@app.route('/logout')
-def logout():
-    # remove the username from the session if it's there
-    session.pop('username', None)
-    return "Goodbye!"
+    if user.verify_password(auth.password):
+        token = jwt.encode(
+            {'public_id': user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)},
+            app.config['SECRET_KEY'])
+        return jsonify({'token': token.decode('UTF-8')})
 
+    return make_response('could not verify',  401, {'WWW.Authentication': 'Basic realm: "login required"'})
 
-@login_manager.user_loader
-def load_user(user_id):
-    return User.get(user_id)
 
 # region USERS
 
@@ -196,10 +246,16 @@ def add_user():
     password = request.json['password']
     email = request.json['email']
 
-    if valid_username(username) is False:
-        return "Username is already taken"
+    # Hash password before creating user object
+    hash_pass = sha256_crypt.hash(password)
 
-    new_user = User(username, password, email)
+    # Catch any table validation errors before creating user
+    try:
+        user_schema.load(request.json)
+    except ValidationError as err:
+        return jsonify({'error': err.messages}), 400
+
+    new_user = User(username, hash_pass, email)
 
     db.session.add(new_user)
     db.session.commit()
@@ -215,13 +271,14 @@ def update_user(id):
 
     username = request.json['username']
     password = request.json['password']
+    hash_pass = sha256_crypt.hash(password)
     email = request.json['email']
 
     user.username = username
-    user.password = password
+    user.password = hash_pass
     user.email = email
 
-    new_user = User(username, password, email)
+    new_user = User(username, hash_pass, email)
 
     db.session.commit()  # No need to add before you commit, since it's a PUT
 
@@ -237,6 +294,7 @@ def delete_user(id):
     result = user_schema.jsonify(user)
     return result
 
+
 # endregion USERS
 
 # region MATCHES
@@ -251,8 +309,9 @@ def list_matches():
 
 # Get a match by match_id
 @app.route('/match/<match_id>', methods=['GET'])
+@token_required
 def get_match(match_id):
-    match = Match.query.get(match_id)
+    match = Match.query.get(match_id, user_id=current_user.id)
     result = match_schema.jsonify(match)
     return result
 
@@ -318,6 +377,7 @@ def update_status(match_id):
 
     return match_schema.jsonify(match)
 
+
 # endregion MATCHES
 
 # region POINTS
@@ -373,7 +433,7 @@ def get_summary(id):
     if total_matches == 0:
         win_percentage = 0
     else:
-        win_percentage = (total_wins/total_matches)*100
+        win_percentage = (total_wins / total_matches) * 100
 
     return jsonify({'Matches played': total_matches, 'Matches won': total_wins, 'Win %': win_percentage})
 
@@ -496,7 +556,7 @@ def get_details(id):
         percentage_receive_win = "Null"
 
     result = {
-        "Points won %" : percentage_points_won,
+        "Points won %": percentage_points_won,
         "First serves in %": percentage_first_serves_in,
         "Second serves in %": percentage_second_serves_in,
         "First serves won %": percentage_first_serve_points_won,

@@ -1,3 +1,5 @@
-https://flask-login.readthedocs.io/en/latest/
+https://realpython.com/token-based-authentication-with-flask/#objectives
 
-https://flask.palletsprojects.com/en/latest/quickstart/#sessions
+Advice is to use Basic Auth first...
+
+Consider using auth0 as the better version once basic auth is understood
