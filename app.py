@@ -4,31 +4,50 @@ from sqlalchemy import or_, and_
 from flask_marshmallow import Marshmallow
 from marshmallow import validates, ValidationError, fields
 import os
-import datetime
+from datetime import datetime, timedelta, timezone
 import uuid
-import jwt
+import redis
 from passlib.hash import sha256_crypt
 from functools import wraps
+
+from flask_jwt_extended import create_access_token, get_jwt, unset_jwt_cookies, verify_jwt_in_request
+from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import jwt_required
+from flask_jwt_extended import JWTManager
 
 # Init app
 app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))  # make the base directory same as this file location
-# Database
-app.config['SECRET_KEY'] = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
+# Database and JWT
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'db.sqlite')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
+jwt = JWTManager(app)
 # Init db
 db = SQLAlchemy(app)
 # Init ma
 ma = Marshmallow(app)
 
 
+# Token blocklist
 
-# password security
-#force_auto_coercion()
+class TokenBlocklist(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    jti = db.Column(db.String(36), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False)
+
+
+# Callback function to check if a JWT exists in the database blocklist
+@jwt.token_in_blocklist_loader
+def check_if_token_revoked(jwt_header, jwt_payload: dict) -> bool:
+    jti = jwt_payload["jti"]
+    token = db.session.query(TokenBlocklist.id).filter_by(jti=jti).scalar()
+
+    return token is not None
 
 
 # User Class/Model
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(20), unique=True, nullable=False)
@@ -36,7 +55,6 @@ class User(db.Model):
     email = db.Column(db.String, nullable=False)
 
     def __init__(self, username, password, email):
-
         self.username = username
         self.password = password
         self.email = email
@@ -71,8 +89,6 @@ class Match(db.Model):
 # Points Class/Model
 
 class Points(db.Model):
-    __tablename__ = "Points"
-
     point_id = db.Column(db.Integer, primary_key=True)
     match_id = db.Column(db.Integer)
 
@@ -95,10 +111,11 @@ class Points(db.Model):
 
 
 # User Schema
+
 class UserSchema(ma.Schema):
-    class Meta:
-        fields = ('id', 'username', 'password', 'email')
-        ordered = True
+    # class Meta:
+    #    fields = ('id', 'username', 'password', 'email')
+    #    ordered = True
 
     id = fields.Integer(dump_only=True)
     username = fields.String(required=True)
@@ -129,17 +146,21 @@ class UserSchema(ma.Schema):
 
 
 # Match Schema
+
 class MatchSchema(ma.Schema):
     class Meta:
         fields = ('match_id', 'player_1_id', 'player_2_id', 'time_stamp', 'winner', 'loser', 'status')
+        ordered = True
 
 
 # Points Schema
+
 class PointsSchema(ma.Schema):
     class Meta:
         fields = ('point_id', 'match_id', 'point_num', 'server_id', 'receiver_id', 'server_sets', 'receiver_sets',
                   'server_games', 'receiver_games', 'server_score', 'receiver_score', 'first_serve_outcome',
                   'second_serve_outcome', 'winner_id')
+        ordered = True
 
 
 # Init Single Schemas
@@ -158,29 +179,6 @@ with app.app_context():
     db.create_all()
 
 
-def token_required(f):
-    @wraps(f)
-    def decorator(*args, **kwargs):
-
-        token = None
-
-        if 'x-access-tokens' in request.headers:
-            token = request.headers['x-access-tokens']
-
-        if not token:
-            return jsonify({'message': 'a valid token is missing'})
-
-        try:
-            data = jwt.decode(token, app.config['SECRET_KEY'])
-            current_user = User.query.filter_by(id=data['id']).first()
-        except:
-            return jsonify({'message': 'token is invalid'})
-
-        return f(current_user, *args, **kwargs)
-
-    return decorator
-
-
 def valid_username(uname):
     query = User.query.filter(User.username == uname).all()
     if query:
@@ -190,34 +188,56 @@ def valid_username(uname):
 
 
 @app.route('/')
+@jwt_required(optional=True)
 def homepage():
-    return "Hello!"
+    current_user = get_jwt_identity()
+    if not current_user:
+        return "Welcome! Please log in or create an account."
+    return "Hello! You are logged in."
 
 
 @app.route('/login', methods=['POST'])
 def login():
-    auth = request.authorization
-    user = User.query.filter_by(username=auth.username).first()
+    username = request.json['username']
+    password = request.json['password']
 
-    if not auth or not auth.username or not auth.password:
-        return make_response('could not verify', 401, {'WWW.Authentication': 'Basic realm: "login required"'})
+    try:
+        user = User.query.filter(User.username == username).all()[0]
+    except IndexError:
+        return jsonify({'message': "Username not found"})
 
-    if user.verify_password(auth.password):
-        token = jwt.encode(
-            {'public_id': user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)},
-            app.config['SECRET_KEY'])
-        return jsonify({'token': token.decode('UTF-8')})
+    if user.verify_password(password):
+        token = create_access_token(identity=user.id)
+        return jsonify({'token': token})
 
-    return make_response('could not verify',  401, {'WWW.Authentication': 'Basic realm: "login required"'})
+    return make_response('could not verify', 403, {'WWW.Authentication': 'Basic realm: "Incorrect Credentials"'})
+
+
+@app.route('/logout', methods=['DELETE'])
+@jwt_required()
+def logout():
+    # revoke token from user
+    response = jsonify({'message': 'Successfully logged out'})
+    #unset_jwt_cookies(response)
+    jti = get_jwt()["jti"]
+    now = datetime.now(timezone.utc)
+    db.session.add(TokenBlocklist(jti=jti, created_at=now))
+    db.session.commit()
+    return response, 200
+
 
 
 # region USERS
 
 # Get all users
 @app.route('/user', methods=['GET'])
+@jwt_required()
 def get_users():
     all_users = User.query.all()
     result = users_schema.dump(all_users)
+    test = get_jwt_identity()
+    print(test)
+    print(get_jwt())
     return jsonify(result)
 
 
@@ -309,9 +329,8 @@ def list_matches():
 
 # Get a match by match_id
 @app.route('/match/<match_id>', methods=['GET'])
-@token_required
 def get_match(match_id):
-    match = Match.query.get(match_id, user_id=current_user.id)
+    match = Match.query.get(match_id)
     result = match_schema.jsonify(match)
     return result
 
