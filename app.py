@@ -5,10 +5,7 @@ from flask_marshmallow import Marshmallow
 from marshmallow import validates, ValidationError, fields
 import os
 from datetime import datetime, timedelta, timezone
-import uuid
-import redis
 from passlib.hash import sha256_crypt
-from functools import wraps
 
 from flask_jwt_extended import create_access_token, get_jwt, unset_jwt_cookies, verify_jwt_in_request
 from flask_jwt_extended import get_jwt_identity
@@ -59,16 +56,20 @@ class User(db.Model):
         verification = sha256_crypt.verify(given_pass, self.password)
         return verification
 
+
 class Friendship(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user1_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    user2_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    friendship_id = db.Column(db.Integer, primary_key=True)
+    requesterId = db.Column(db.Integer)
+    addresseeId = db.Column(db.Integer)
+    statusCode = db.Column(db.String)
+    statusSpecifiedId = db.Column(db.Integer)
 
-    user1 = db.relationship('User', foreign_keys=[user1_id])
-    user2 = db.relationship('User', foreign_keys=[user2_id])
+    def __init__(self, requesterId, AddresseeId):
+        self.requesterId = requesterId
+        self.AddresseeId = AddresseeId
+        self.statusCode = 'R'
+        self.statusSpecifiedId = requesterId
 
-    def __repr__(self):
-        return f'<Friendship between {self.user1.name} and {self.user2.name}>'
 
 # Match Class/Model
 
@@ -178,20 +179,23 @@ class PointsSchema(ma.Schema):
 
 class FriendshipSchema(ma.Schema):
     id = fields.Int(dump_only=True)
-    user1_id = fields.Int()
-    user2_id = fields.Int()
-    user1 = fields.Nested(lambda: UserSchema(only=("id", "name")), dump_only=True)
-    user2 = fields.Nested(lambda: UserSchema(only=("id", "name")), dump_only=True)
+    requesterId = fields.Int(required=True)
+    addresseeId = fields.Int(required=True)
+    statusCode = fields.String(required=True)
+    statusSpecifierId = fields.String(required=True)
 
 # Init Single Schemas
 user_schema = UserSchema()
 match_schema = MatchSchema()
 point_schema = PointsSchema()
+friend_schema = FriendshipSchema()
 
 # Init Multiple Schemas
 users_schema = UserSchema(many=True)
 matches_schema = MatchSchema(many=True)
 points_schema = PointsSchema(many=True)
+friends_schema = FriendshipSchema(many=True)
+
 
 # When first starting the db:
 with app.app_context():
@@ -431,6 +435,32 @@ def create_account():
     return user_schema.jsonify(new_user)
 
 
+# Add friendships test
+@app.route('/friendships/<id_1>/<id_2>', methods=['POST'])
+def add_friend(id_1, id_2):
+    new_friendship = Friendship(id_1, id_2)
+    db.session.add(new_friendship)
+    db.session.commit()
+    return friend_schema.jsonify(new_friendship)
+
+# get friends list
+# todo: Add method for making a list of friends
+@app.route('/friendships/<id>', methods=['GET'])
+def get_friends(id):
+    friends_list = []
+    friends_1 = Friendship.query.filter(
+        and_(Friendship.requesterId == id, Friendship.statusCode == 'A')
+    )
+    friends_2 = Friendship.query.filter(
+        and_(Friendship.addresseeId == id, Friendship.statusCode == 'A')
+    )
+
+    print(friends_1)
+    print(friends_2)
+    return friends_schema.jsonify(friends)
+
+
+
 # Edit account
 @app.route('/account/update', methods=['PUT'])
 @jwt_required()
@@ -526,7 +556,7 @@ def get_details():
     return stats
 
 
-# get head to head stats
+# get head-to-head stats
 @app.route('/stats/head-to-head/<p1>/<p2>')
 def vs_stats(p1, p2):
     points_data = Points.query.filter(
@@ -541,7 +571,7 @@ def vs_stats(p1, p2):
     return [(p1, p1_stats), (p2, p2_stats)]
 
 
-# get head to head stats
+# compare user stats overall
 @app.route('/stats/comparison/<p1>/<p2>')
 def compare_stats(p1, p2):
     p1_summary_data = Match.query.filter(
