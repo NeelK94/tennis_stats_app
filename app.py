@@ -62,13 +62,13 @@ class Friendship(db.Model):
     requesterId = db.Column(db.Integer)
     addresseeId = db.Column(db.Integer)
     statusCode = db.Column(db.String)
-    statusSpecifiedId = db.Column(db.Integer)
+    statusSpecifierId = db.Column(db.Integer)
 
-    def __init__(self, requesterId, AddresseeId):
+    def __init__(self, requesterId, addresseeId, statusCode):
         self.requesterId = requesterId
-        self.AddresseeId = AddresseeId
-        self.statusCode = 'R'
-        self.statusSpecifiedId = requesterId
+        self.addresseeId = addresseeId
+        self.statusCode = statusCode  # Requested (R), Accepted (A), Blocked (B)
+        self.statusSpecifierId = requesterId
 
 
 # Match Class/Model
@@ -116,7 +116,6 @@ class Points(db.Model):
 # User Schema
 
 class UserSchema(ma.Schema):
-
     id = fields.Integer(dump_only=True)
     username = fields.String(required=True)
     first_name = fields.String(required=True)
@@ -178,11 +177,20 @@ class PointsSchema(ma.Schema):
 
 
 class FriendshipSchema(ma.Schema):
-    id = fields.Int(dump_only=True)
+    friendship_id = fields.Int(dump_only=True)
     requesterId = fields.Int(required=True)
     addresseeId = fields.Int(required=True)
     statusCode = fields.String(required=True)
-    statusSpecifierId = fields.String(required=True)
+    statusSpecifierId = fields.Int(required=True)
+
+    @validates('statusCode')
+    def validate_friend_status(self, value):
+        if not value:
+            raise ValidationError('Friendship status code is required')
+        if value not in ['R', 'A', 'B']:
+            raise ValidationError('That is an invalid friendship status code')
+        return value
+
 
 # Init Single Schemas
 user_schema = UserSchema()
@@ -196,10 +204,9 @@ matches_schema = MatchSchema(many=True)
 points_schema = PointsSchema(many=True)
 friends_schema = FriendshipSchema(many=True)
 
-
 # When first starting the db:
 with app.app_context():
-    #db.drop_all()
+    # db.drop_all()
     db.create_all()
 
 
@@ -213,7 +220,6 @@ def valid_username(uname):
 
 # get stats for a given user id from an already filtered view of the Points table.
 def get_detailed_stats(data, id):
-
     total_points_played = len(
         data.filter(
             or_(Points.server_id == id, Points.receiver_id == id)
@@ -436,29 +442,122 @@ def create_account():
 
 
 # Add friendships test
-@app.route('/friendships/<id_1>/<id_2>', methods=['POST'])
-def add_friend(id_1, id_2):
-    new_friendship = Friendship(id_1, id_2)
+@app.route('/friendships/new/<id_2>', methods=['POST'])
+@jwt_required()
+def add_friend(id_2):
+    id_1 = get_jwt_identity()
+    existing = Friendship.query.with_entities(Friendship.statusCode).filter(
+        or_(
+            and_(Friendship.requesterId == id_1, Friendship.addresseeId == id_2),
+            and_(Friendship.requesterId == id_2, Friendship.addresseeId == id_1)
+        )
+    ).all()
+    print(existing)
+
+    if existing:
+        if existing[0][0] == "R":
+            return "You have already requested a friendship with this person, please wait for them to respond"
+        elif existing[0][0] == "A":
+            return "You are already friends with this person"
+        elif existing[0][0] == "B":
+            return "This friendship is blocked"
+    new_friendship = Friendship(id_1, id_2, "R")
     db.session.add(new_friendship)
     db.session.commit()
     return friend_schema.jsonify(new_friendship)
 
+
 # get friends list
-# todo: Add method for making a list of friends
-@app.route('/friendships/<id>', methods=['GET'])
-def get_friends(id):
-    friends_list = []
+@app.route('/friendships', methods=['GET'])
+@jwt_required()
+def get_friends():
+    id = get_jwt_identity()
+    friends_list = set()
     friends_1 = Friendship.query.filter(
-        and_(Friendship.requesterId == id, Friendship.statusCode == 'A')
-    )
+        and_(Friendship.requesterId == id, Friendship.statusCode == 'R')  # CHANGE TO A
+    ).all()
     friends_2 = Friendship.query.filter(
-        and_(Friendship.addresseeId == id, Friendship.statusCode == 'A')
-    )
+        and_(Friendship.addresseeId == id, Friendship.statusCode == 'R')  # CHANGE TO A
+    ).all()
 
-    print(friends_1)
-    print(friends_2)
-    return friends_schema.jsonify(friends)
+    for f in friends_1:
+        friends_list.add(f.addresseeId)
+    for f in friends_2:
+        friends_list.add(f.requesterId)
+    return jsonify(list(friends_list))
 
+
+@app.route('/friendships/test_all', methods=['GET'])
+def get_all_friendships():
+    all_friends = Friendship.query.all()
+    result = friends_schema.dump(all_friends)
+    return jsonify(result)
+
+
+@app.route('/friendships/remove/<f_id>', methods=['DELETE'])
+@jwt_required()
+def remove_friend(f_id):
+    id = get_jwt_identity()
+    friendship = Friendship.query.get(f_id)
+    if friendship.addresseeId == id or friendship.requesterId == id:
+        db.session.delete(friendship)
+        db.session.commit()
+        result = friend_schema.jsonify(friendship)
+    else:
+        result = "Unable to perform action"
+
+    return result
+
+
+# Get pending friend requests
+@app.route('/friendships/requests', methods=['GET'])
+@jwt_required()
+def friend_requests():
+    id = get_jwt_identity()
+    friends = Friendship.query.filter(
+        and_(Friendship.addresseeId == id, Friendship.statusCode == 'R')  # CHANGE TO A
+    ).all()
+
+    result = friends_schema.jsonify(friends)
+
+    return result
+
+
+@app.route('/friendships/accept/<f_id>', methods=['PUT'])
+@jwt_required()
+def accept_request(f_id):
+    id = get_jwt_identity()
+    request = Friendship.query.get(f_id)
+    if request.addresseeId == id and request.statusCode == "R":
+        request.statusCode = "A"
+    else:
+        return "Unable to perform action"
+
+    return "Friend request accepted!"
+
+
+@app.route('/friendships/block/<their_id>', methods=['PUT', 'POST'])
+@jwt_required()
+def block_user(their_id):
+    my_id = get_jwt_identity()
+    existing = Friendship.query.with_entities(Friendship.friendship_id).filter(
+        or_(
+            and_(Friendship.requesterId == their_id, Friendship.addresseeId == my_id),
+            and_(Friendship.requesterId == my_id, Friendship.addresseeId == their_id)
+        )
+    ).all()
+
+    if existing:
+        friendship = Friendship.query.get(existing[0][0])
+        friendship.statusCode = "B"
+    else:
+        blocked = Friendship(my_id, their_id, "B")
+        db.session.add(blocked)
+        db.session.commit()
+
+    db.session.commit()
+
+    return "User blocked"
 
 
 # Edit account
@@ -550,8 +649,8 @@ def get_summary():
 def get_details():
     id = get_jwt_identity()
     data = Points.query.filter(
-            or_(Points.server_id == id, Points.receiver_id == id)
-        )
+        or_(Points.server_id == id, Points.receiver_id == id)
+    )
     stats = get_detailed_stats(data, id)
     return stats
 
@@ -576,17 +675,17 @@ def vs_stats(p1, p2):
 def compare_stats(p1, p2):
     p1_summary_data = Match.query.filter(
         or_(Match.player_1_id == p1, Match.player_2_id == p1)
-        )
+    )
     p2_summary_data = Match.query.filter(
         or_(Match.player_1_id == p2, Match.player_2_id == p2)
-        )
+    )
 
     p1_points_data = Points.query.filter(
-            or_(Points.server_id == p1, Points.receiver_id == p1)
-        )
+        or_(Points.server_id == p1, Points.receiver_id == p1)
+    )
     p2_points_data = Points.query.filter(
         or_(Points.server_id == p2, Points.receiver_id == p2)
-        )
+    )
 
     p1_summary_stats = get_summary_stats(p1_summary_data, p1)
     p2_summary_stats = get_summary_stats(p2_summary_data, p2)
@@ -597,7 +696,6 @@ def compare_stats(p1, p2):
     results = {"p1_id": p1, "p1_summary": p1_summary_stats, "p1_details": p1_detailed_stats,
                "p2_id": p2, "p2_summary": p2_summary_stats, "p2_details": p2_detailed_stats}
     return jsonify(results)
-
 
 
 # endregion USERS
@@ -637,7 +735,7 @@ def match_stats(match_id):
     p1_stats = get_detailed_stats(match_data, player_1_id)
     p2_stats = get_detailed_stats(match_data, player_2_id)
 
-    return [(player_1_id, p2_stats), (player_2_id, p2_stats)]
+    return [(player_1_id, p1_stats), (player_2_id, p2_stats)]
 
 
 # Filter matches for one player or a pair of players
