@@ -2,7 +2,7 @@
 
 Welcome! This repo contains a mini project I completed to learn about RestAPI's.
 
-The intention was to create a backend for a tennis app using Python, Flask, SQLAlchemy and Marshmallow. I used JWT for tokenization and  
+The intention was to create a backend for a tennis app using Python, Flask, SQLAlchemy and Marshmallow. I used JWT for tokenization and tested all endpoints using Postman.
 
 The app is not hosted anywhere and a randomly generated secret key is used. For good practice, please generate a new secret key before using.
 
