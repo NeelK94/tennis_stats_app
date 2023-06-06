@@ -1,13 +1,13 @@
-from flask import Flask, request, jsonify, session, request, make_response
+from flask import Flask, jsonify, request, make_response
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, and_
 from flask_marshmallow import Marshmallow
 from marshmallow import validates, ValidationError, fields
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from passlib.hash import sha256_crypt
 
-from flask_jwt_extended import create_access_token, get_jwt, unset_jwt_cookies, verify_jwt_in_request
+from flask_jwt_extended import create_access_token, get_jwt
 from flask_jwt_extended import get_jwt_identity
 from flask_jwt_extended import jwt_required
 from flask_jwt_extended import JWTManager
@@ -372,7 +372,6 @@ def pending_verifications(id):
     matches = Match.query.filter(
         and_(Match.player_2_id == id, Match.status == "Sent")
     ).all()
-    print(matches)
     return matches
 
 
@@ -452,7 +451,6 @@ def add_friend(id_2):
             and_(Friendship.requesterId == id_2, Friendship.addresseeId == id_1)
         )
     ).all()
-    print(existing)
 
     if existing:
         if existing[0][0] == "R":
@@ -485,13 +483,6 @@ def get_friends():
     for f in friends_2:
         friends_list.add(f.requesterId)
     return jsonify(list(friends_list))
-
-
-@app.route('/friendships/test_all', methods=['GET'])
-def get_all_friendships():
-    all_friends = Friendship.query.all()
-    result = friends_schema.dump(all_friends)
-    return jsonify(result)
 
 
 @app.route('/friendships/remove/<f_id>', methods=['DELETE'])
