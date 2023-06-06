@@ -10,4 +10,3 @@ passlib~=1.7.4
 flask_jwt_extended
 redis
 flask_jwt_extended
-redis
