@@ -18,7 +18,7 @@ basedir = os.path.abspath(os.path.dirname(__file__))  # make the base directory 
 # Database and JWT
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'db.sqlite')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c"
+app.config['JWT_SECRET_KEY'] = "e7a627480fb8f3fc782f456d63653256109efc93418442bbb643c16ab461461c" # Generate a new secret key before use
 jwt = JWTManager(app)
 # Init db
 db = SQLAlchemy(app)
